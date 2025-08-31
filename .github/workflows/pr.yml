@@ -1,0 +1,13 @@
+name: PR
+on:
+  pull_request:
+    branches: [ main, master ]
+permissions: read-all
+jobs:
+  validate:
+    uses: <your-org>/ci-lib/.github/workflows/validate.yml@v1.0.0
+  security:
+    needs: [validate]
+    uses: <your-org>/ci-lib/.github/workflows/security.yml@v1.0.0
+    with: { scan_deps: true }
+    secrets: inherit

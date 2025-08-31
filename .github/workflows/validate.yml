@@ -1,0 +1,46 @@
+name: Validate
+on:
+  workflow_call: {}
+jobs:
+  yaml-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ibiqlik/action-yamllint@v3
+        with: { format: github }
+      - uses: reviewdog/action-actionlint@v1
+        with: { fail_on_error: true }
+      - run: docker compose -f docker-compose.yml config -q || true
+
+  test-app:
+    runs-on: ubuntu-latest
+    needs: [yaml-verify]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: 'pip' }
+      - run: |
+          pip install -U pip
+          [ -f app/requirements.txt ] && pip install -r app/requirements.txt
+          pip install pytest pytest-cov
+      - run: pytest -q --junitxml=app/test-results/junit.xml --cov=app --cov-report=xml:app/coverage.xml || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: app-coverage, path: app/coverage.xml }
+
+  test-web:
+    runs-on: ubuntu-latest
+    needs: [yaml-verify]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose build front
+      - run: docker compose up -d front
+      - name: Wait for front
+        run: |
+          for i in {1..60}; do curl -fsS http://localhost:8080/ && exit 0; sleep 1; done
+          echo "front did not start"; exit 1
+      - run: |
+          curl -fsS http://localhost:8080/ -o web-static-index.html
+          grep -q "Play Super Mario" web-static-index.html
+      - if: always()
+        run: docker compose down -v

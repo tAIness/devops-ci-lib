@@ -1,0 +1,74 @@
+name: Security
+on:
+  workflow_call:
+    inputs:
+      scan_deps:     { type: boolean, default: true }
+      image_artifact:{ type: string,  default: "images-to-scan" }
+    secrets:
+      SNYK_TOKEN:    { required: false }
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout the CALLER repo so we can see an optional overlay file
+      - uses: actions/checkout@v4
+
+      # Build .snyk from org defaults + optional overlay
+      - name: Apply Snyk ignores
+        if: ${{ secrets.SNYK_TOKEN != '' }}
+        uses: <your-org>/ci-lib/.github/actions/apply-snyk-ignores@v1
+        with:
+          snyk_token: ${{ secrets.SNYK_TOKEN }}
+          overlay_csv_path: .snyk-ignores.csv
+      - name: Upload .snyk
+        if: ${{ secrets.SNYK_TOKEN != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-policy
+          path: .snyk
+
+  deps:
+    if: ${{ inputs.scan_deps && secrets.SNYK_TOKEN != '' }}
+    needs: [policy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: snyk-policy, path: . }
+      - name: Snyk test (deps)
+        uses: snyk/actions/python@v4
+        env: { SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }} }
+        with:
+          args: >-
+            --all-projects --detection-depth=4
+            --severity-threshold=medium
+            --policy-path=.snyk
+        continue-on-error: true
+
+  images:
+    if: ${{ secrets.SNYK_TOKEN != '' }}
+    needs: [policy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: ${{ inputs.image_artifact }}, path: images }
+      - uses: actions/download-artifact@v4
+        with: { name: snyk-policy, path: . }
+      - uses: snyk/actions/setup@v4
+      - name: Snyk test (images)
+        env: { SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }} }
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(images/*.txt)
+          if (( ${#files[@]} == 0 )); then
+            echo "No image refs to scan (skip)."; exit 0
+          fi
+          for f in "${files[@]}"; do
+            img="$(cat "$f")"
+            echo "Snyk container: $img"
+            snyk container test "$img" \
+              --severity-threshold=medium \
+              --policy-path=.snyk || true
+          done
