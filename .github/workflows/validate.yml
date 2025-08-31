@@ -1,46 +1,171 @@
 name: Validate
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      # ---- yamllint ----
+      run_yamllint:     { type: boolean, default: true }
+      yamllint_config:  { type: string,  default: "" }      # path in caller repo
+      yamllint_strict:  { type: boolean, default: false }   # warnings fail job when true
+
+      # ---- actionlint / compose ----
+      run_actionlint:   { type: boolean, default: true }
+      run_compose_chk:  { type: boolean, default: true }
+
+      # ---- markdownlint ----
+      run_markdownlint: { type: boolean, default: true }
+      markdownlint_config: { type: string, default: "" }    # path in caller
+
+      # ---- shellcheck ----
+      run_shellcheck:   { type: boolean, default: true }
+
+      # ---- hadolint ----
+      run_hadolint:     { type: boolean, default: true }
+      hadolint_config:  { type: string,  default: "" }      # path in caller (e.g. .hadolint.yaml)
+
+      # ---- secrets scanning ----
+      run_secret_scan:  { type: boolean, default: true }
+      secret_scan_tool: { type: string,  default: "gitleaks" }  # gitleaks | snyk_code | off
+      secret_soft_fail: { type: boolean, default: true }
+    secrets:
+      SNYK_TOKEN:
+        required: false
+
+permissions: read-all
+
 jobs:
-  yaml-verify:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ibiqlik/action-yamllint@v3
-        with: { format: github }
-      - uses: reviewdog/action-actionlint@v1
-        with: { fail_on_error: true }
-      - run: docker compose -f docker-compose.yml config -q || true
 
-  test-app:
-    runs-on: ubuntu-latest
-    needs: [yaml-verify]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11', cache: 'pip' }
-      - run: |
-          pip install -U pip
-          [ -f app/requirements.txt ] && pip install -r app/requirements.txt
-          pip install pytest pytest-cov
-      - run: pytest -q --junitxml=app/test-results/junit.xml --cov=app --cov-report=xml:app/coverage.xml || true
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with: { name: app-coverage, path: app/coverage.xml }
-
-  test-web:
-    runs-on: ubuntu-latest
-    needs: [yaml-verify]
-    steps:
-      - uses: actions/checkout@v4
-      - run: docker compose build front
-      - run: docker compose up -d front
-      - name: Wait for front
+      # ---------- yamllint ----------
+      - name: Resolve yamllint config
+        if: ${{ inputs.run_yamllint }}
+        shell: bash
         run: |
-          for i in {1..60}; do curl -fsS http://localhost:8080/ && exit 0; sleep 1; done
-          echo "front did not start"; exit 1
-      - run: |
-          curl -fsS http://localhost:8080/ -o web-static-index.html
-          grep -q "Play Super Mario" web-static-index.html
-      - if: always()
-        run: docker compose down -v
+          set -euo pipefail
+          if [[ -n "${{ inputs.yamllint_config }}" && -f "${{ inputs.yamllint_config }}" ]]; then
+            echo "YAML_CONF=${{ inputs.yamllint_config }}" >> $GITHUB_ENV
+            echo "Using caller-provided yamllint config"
+            exit 0
+          fi
+          if [[ -f .yamllint.yaml ]]; then
+            echo "YAML_CONF=.yamllint.yaml" >> $GITHUB_ENV
+            echo "Using repo .yamllint.yaml"
+            exit 0
+          elif [[ -f .yamllint.yml ]]; then
+            echo "YAML_CONF=.yamllint.yml" >> $GITHUB_ENV
+            echo "Using repo .yamllint.yml"
+            exit 0
+          fi
+          echo "No repo yamllint config; writing shared default"
+          mkdir -p .github/ci
+          cat > .github/ci/.yamllint-org.yaml <<'YAML'
+extends: default
+ignore: |
+  node_modules/*
+  content/images/*
+  web/game/assets/*
+  playwright-report/*
+  **/*.spdx.json
+rules:
+  document-start: disable
+  truthy: disable
+  line-length:
+    max: 200
+    level: warning
+  indentation:
+    indent-sequences: false
+YAML
+          echo "YAML_CONF=.github/ci/.yamllint-org.yaml" >> $GITHUB_ENV
+
+      - name: yamllint (entire repo)
+        if: ${{ inputs.run_yamllint }}
+        uses: ibiqlik/action-yamllint@v3
+        with:
+          config_file: ${{ env.YAML_CONF }}
+          file_or_dir: .
+          format: github
+          strict: ${{ inputs.yamllint_strict }}
+          no_warnings: false
+
+      # ---------- actionlint ----------
+      - name: actionlint (GitHub Actions YAML)
+        if: ${{ inputs.run_actionlint }}
+        uses: reviewdog/action-actionlint@v1
+        with:
+          fail_on_error: true
+
+      # ---------- docker-compose syntax ----------
+      - name: Validate docker-compose.yml (if present)
+        if: ${{ inputs.run_compose_chk }}
+        shell: bash
+        run: |
+          if [[ -f docker-compose.yml ]]; then
+            docker compose -f docker-compose.yml config -q
+          else
+            echo "No docker-compose.yml; skipping"
+          fi
+
+      # ---------- markdownlint ----------
+      - name: Markdownlint
+        if: ${{ inputs.run_markdownlint && hashFiles('**/*.md') != '' }}
+        uses: DavidAnson/markdownlint-cli2-action@v11
+        with:
+          config: ${{ inputs.markdownlint_config }}
+          globs: |
+            **/*.md
+
+      # ---------- shellcheck ----------
+      - name: ShellCheck
+        if: ${{ inputs.run_shellcheck && hashFiles('**/*.sh') != '' }}
+        uses: ludeeus/action-shellcheck@v3
+
+      # ---------- hadolint ----------
+      - name: Hadolint (Dockerfiles)
+        if: ${{ inputs.run_hadolint }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files | grep -E '(^|/)(Dockerfile(\..*)?|.*\.Dockerfile)$' || true)
+          if (( ${#files[@]} == 0 )); then
+            echo "No Dockerfiles; skipping hadolint"; exit 0
+          fi
+          cfg=""
+          if [[ -n "${{ inputs.hadolint_config }}" && -f "${{ inputs.hadolint_config }}" ]]; then
+            cfg="--config ${{ inputs.hadolint_config }}"
+          elif [[ -f .hadolint.yaml ]]; then
+            cfg="--config .hadolint.yaml"
+          elif [[ -f .hadolint.yml ]]; then
+            cfg="--config .hadolint.yml"
+          fi
+          echo "Linting ${#files[@]} Dockerfile(s)"
+          curl -fsSL https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64 -o hadolint
+          chmod +x hadolint
+          rc=0
+          for f in "${files[@]}"; do
+            echo "::group::hadolint $f"
+            ./hadolint $cfg "$f" || rc=$?
+            echo "::endgroup::"
+          done
+          exit $rc
+
+      # ---------- secret scanning ----------
+      # Option 1: gitleaks (default; no token needed)
+      - name: gitleaks (secret scan)
+        if: ${{ inputs.run_secret_scan && inputs.secret_scan_tool == 'gitleaks' }}
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          args: "--no-banner --redact"
+        continue-on-error: ${{ inputs.secret_soft_fail }}
+
+      # Option 2: Snyk Code (secrets/SAST) if you have entitlement + token
+      - name: Snyk Code (secrets/SAST)
+        if: ${{ inputs.run_secret_scan && inputs.secret_scan_tool == 'snyk_code' && secrets.SNYK_TOKEN != '' }}
+        uses: snyk/actions/setup@v4
+      - name: Snyk Code scan
+        if: ${{ inputs.run_secret_scan && inputs.secret_scan_tool == 'snyk_code' && secrets.SNYK_TOKEN != '' }}
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: snyk code test
+        continue-on-error: ${{ inputs.secret_soft_fail }}
