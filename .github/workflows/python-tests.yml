@@ -2,36 +2,56 @@ name: Python tests
 on:
   workflow_call:
     inputs:
-      workdir:        { type: string,  default: "app" }
-      python_version: { type: string,  default: "3.11" }
+      workdir:
+        type: string
+        default: "app"
+      python_version:
+        type: string
+        default: "3.11"
+
 permissions: read-all
 
 jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: ${{ inputs.python_version }}, cache: 'pip' }
-      - name: Install deps
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+
+      - name: Install dependencies
+        shell: bash
         working-directory: ${{ inputs.workdir }}
         run: |
-          pip install -U pip
-          [ -f requirements.txt ] && pip install -r requirements.txt
+          set -e
+          python -V
+          pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pytest pytest-cov
-      - name: Pytest
+
+      - name: Run tests with coverage
+        shell: bash
         working-directory: ${{ inputs.workdir }}
         run: |
           pytest -q --junitxml=test-results/junit.xml \
                  --cov=. --cov-report=xml:coverage.xml || true
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload JUnit
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: python-junit
           path: ${{ inputs.workdir }}/test-results/junit.xml
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload coverage.xml
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: python-coverage
           path: ${{ inputs.workdir }}/coverage.xml
