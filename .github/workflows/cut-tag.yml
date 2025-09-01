@@ -1,11 +1,10 @@
-name: _cut-tag (reusable)
+name: cut-tag
 on:
   workflow_call:
     inputs:
-      bump:
-        description: "SemVer bump"
+      bump:                  # patch | minor | major
         type: string
-        default: patch   # patch|minor|major
+        default: patch
       prefix:
         type: string
         default: "v"
@@ -15,32 +14,29 @@ on:
       create_github_release:
         type: boolean
         default: true
+
 permissions:
-  contents: write   # needed to create & push tags and optional releases
+  contents: write
 
 jobs:
-  bump-and-tag:
+  cut:
     runs-on: ubuntu-latest
-    outputs:
-      next: ${{ steps.ver.outputs.next }}
-      base: ${{ steps.ver.outputs.base }}
     steps:
-      - name: Checkout (with full history & tags)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
 
       - name: Compute next version
         id: ver
         shell: bash
         run: |
           set -euo pipefail
-          prefix="${{ inputs.bump && inputs.bump != '' && inputs.prefix || 'v' }}"
+          prefix="${{ inputs.prefix }}"
           bump="${{ inputs.bump }}"
           initial="${{ inputs.initial_version }}"
-          # get latest tag that matches prefix+semver
+
           latest="$(git tag -l "${prefix}[0-9]*.[0-9]*.[0-9]*" --sort=-v:refname | head -n1 || true)"
           if [[ -z "$latest" ]]; then base="${prefix}${initial}"; else base="$latest"; fi
+
           ver="${base#$prefix}"
           IFS='.' read -r MAJ MIN PAT <<<"$ver"
           case "$bump" in
@@ -50,8 +46,9 @@ jobs:
             *) echo "Unknown bump: $bump" >&2; exit 1;;
           esac
           next="${prefix}${MAJ}.${MIN}.${PAT}"
-          echo "base=$base"  >> $GITHUB_OUTPUT
-          echo "next=$next"  >> $GITHUB_OUTPUT
+
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
           echo "Computed: $base -> $next"
 
       - name: Configure git author
@@ -64,9 +61,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ steps.ver.outputs.next }}"
-          # Safety: do nothing if tag exists remotely
           if git ls-remote --tags origin | grep -q "refs/tags/${tag}$"; then
-            echo "::notice::Tag ${tag} already exists on origin; skipping push"
+            echo "::notice::Tag ${tag} already exists; skipping push"
             exit 0
           fi
           git tag -a "$tag" -m "Release $tag"
