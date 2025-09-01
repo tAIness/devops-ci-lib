@@ -5,32 +5,21 @@ on:
       yamllint_config:  { type: string,  default: "" }
       yamllint_strict:  { type: boolean, default: false }
 permissions: read-all
-
 jobs:
   yaml-verify:
-    name: YAML verify (yamllint + actionlint + compose)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Resolve yamllint config
-        shell: bash
         run: |
           set -euo pipefail
           if [[ -n "${{ inputs.yamllint_config }}" && -f "${{ inputs.yamllint_config }}" ]]; then
-            echo "YAML_CONF=${{ inputs.yamllint_config }}" >> $GITHUB_ENV; exit 0
-          fi
+            echo "YAML_CONF=${{ inputs.yamllint_config }}" >> $GITHUB_ENV; exit 0; fi
           if [[ -f .yamllint.yaml ]]; then echo "YAML_CONF=.yamllint.yaml" >> $GITHUB_ENV; exit 0; fi
           if [[ -f .yamllint.yml ]];  then echo "YAML_CONF=.yamllint.yml"  >> $GITHUB_ENV; exit 0; fi
           mkdir -p .github/ci
           cat > .github/ci/.yamllint-org.yaml <<'YAML'
 extends: default
-ignore: |
-  node_modules/*
-  content/images/*
-  web/game/assets/*
-  playwright-report/*
-  **/*.spdx.json
 rules:
   document-start: disable
   truthy: disable
@@ -38,23 +27,15 @@ rules:
   indentation: { indent-sequences: false }
 YAML
           echo "YAML_CONF=.github/ci/.yamllint-org.yaml" >> $GITHUB_ENV
-
-      - name: yamllint (entire repo)
-        uses: ibiqlik/action-yamllint@v3
+      - uses: ibiqlik/action-yamllint@v3
         with:
           config_file: ${{ env.YAML_CONF }}
           file_or_dir: .
           format: github
           strict: ${{ inputs.yamllint_strict }}
-          no_warnings: false
-
-      - name: actionlint (GitHub Actions YAML)
-        uses: reviewdog/action-actionlint@v1
-        with:
-          fail_on_error: true
-
+      - uses: reviewdog/action-actionlint@v1
+        with: { fail_on_error: true }
       - name: Validate docker-compose.yml (if present)
-        shell: bash
         run: |
           if [[ -f docker-compose.yml ]]; then
             docker compose -f docker-compose.yml config -q
