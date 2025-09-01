@@ -1,0 +1,32 @@
+name: Cut release tag
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: SemVer bump
+        type: choice
+        default: patch
+        options: [patch, minor, major]
+      prefix:
+        description: Tag prefix
+        type: string
+        default: v
+      initial_version:
+        description: Start from (if no tags yet)
+        type: string
+        default: 1.0.0
+      create_github_release:
+        description: Create a GitHub Release entry
+        type: boolean
+        default: true
+permissions:
+  contents: write
+
+jobs:
+  cut:
+    uses: ./.github/workflows/_cut-tag.yml
+    with:
+      bump: ${{ github.event.inputs.bump }}
+      prefix: ${{ github.event.inputs.prefix }}
+      initial_version: ${{ github.event.inputs.initial_version }}
+      create_github_release: ${{ fromJSON(github.event.inputs.create_github_release) }}
