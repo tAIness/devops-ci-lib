@@ -1,4 +1,4 @@
-# yamllint disable rule:line-length
+# yamllint disable rule:line-length rule:indentation
 ---
 name: Reusable - Snyk container scan (with ignore list)
 
@@ -62,129 +62,125 @@ jobs:
     permissions:
       contents: read
     steps:
-    - name: Checkout caller repo (to read ignores file / Dockerfiles)
-      uses: actions/checkout@v4
+      - name: Checkout caller repo (to read ignores file / Dockerfiles)
+        uses: actions/checkout@v4
 
-    - name: Detect Docker Hub creds presence
-      id: dh
-      shell: bash
-      env:
-        DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-        DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-      run: |
-        if [[ -n "$DH_USER" && -n "$DH_TOKEN" ]]; then
-          echo "has=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "has=false" >> "$GITHUB_OUTPUT"
-        fi
-
-    - name: (Optional) Docker Hub login (for private images)
-      if: ${{ steps.dh.outputs.has == 'true' }}
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-    - name: Setup Buildx if dockerfiles provided
-      if: ${{ inputs.dockerfiles != '' }}
-      uses: docker/setup-buildx-action@v3
-
-    - name: Setup Buildx if dockerfiles provided
-      if: ${{ inputs.dockerfiles != '' }}
-      uses: docker/setup-buildx-action@v3
-
-    - name: Reset buildx builder
-      if: ${{ inputs.dockerfiles != '' }}
-      run: |
-        docker buildx rm mybuilder || true
-        docker buildx create --use --name mybuilder
-
-    - name: Build images from dockerfiles (local tags)
-      id: build
-      if: ${{ inputs.dockerfiles != '' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        echo "${{ inputs.dockerfiles }}" | sed 's/^[ \t]*//' > dockerfiles.txt
-        : > built-images.txt
-        i=0
-        while read -r DF; do
-          [[ -z "$DF" ]] && continue
-          ((i=i+1))
-          TAG="local/snyk-${i}:pr"
-          CTX="$(dirname "$DF")"
-          echo "Building $TAG from $DF (context=$CTX)"
-          docker build --progress=plain -t "$TAG" -f "$DF" "$CTX"
-          echo "$TAG" >> built-images.txt
-        done < dockerfiles.txt
-        {
-          echo "images<<EOF"
-          cat built-images.txt
-          echo "EOF"
-        } >> "$GITHUB_OUTPUT"
-
-    - name: Install Snyk CLI
-      uses: snyk/actions/setup@0.4.0
-
-    - name: Auth Snyk
-      run: snyk auth "${SNYK_TOKEN}"
-      env:
-        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-
-    - name: Build .snyk policy from ignore list
-      shell: bash
-      run: |
-        set -euo pipefail
-        touch .snyk
-        if [[ -f "${{ inputs.ignore_list_path }}" ]]; then
-          echo "Applying ignores from ${{ inputs.ignore_list_path }}"
-          grep -v '^\s*#' "${{ inputs.ignore_list_path }}" | sed '/^\s*$/d' | while read -r ID; do
-            echo "Ignoring $ID"
-            snyk ignore --id="$ID" --reason="approved via repo ignore list" --expiry=2099-12-31 --yes --quiet || true
-          done
-        else
-          echo "No ignore list at ${{ inputs.ignore_list_path }}; proceeding without ignores."
-        fi
-        echo "Final .snyk policy:"
-        cat .snyk || true
-
-    - name: Scan images
-      id: scan
-      shell: bash
-      run: |
-        set -euo pipefail
-        {
-          [[ -n "${{ inputs.images }}" ]] && echo "${{ inputs.images }}"
-          [[ -n "${{ steps.build.outputs.images }}" ]] && echo "${{ steps.build.outputs.images }}"
-          [[ -n "${{ inputs.repo_app }}" && -n "${{ inputs.image_tag }}" ]] && echo "${{ inputs.repo_app }}:${{ inputs.image_tag }}"
-          [[ -n "${{ inputs.repo_web }}" && -n "${{ inputs.image_tag }}" ]] && echo "${{ inputs.repo_web }}:${{ inputs.image_tag }}"
-        } | sed '/^\s*$/d' > images.txt
-
-        echo "Images to scan:"
-        cat images.txt
-
-        failures=0
-        while read -r IMG; do
-          [[ -z "$IMG" ]] && continue
-          echo "=== Pulling (if remote) and scanning: $IMG"
-          docker pull "$IMG" >/dev/null 2>&1 || echo "(local/private image; pull skipped)"
-
-          SAFE="$(echo "$IMG" | tr '/:@' '___')"
-          OUT="snyk-${SAFE}.json"
-
-          if ! snyk container test "$IMG" \
-               --severity-threshold="${{ inputs.severity }}" \
-               --json-file-output="$OUT"; then
-            echo "Snyk failed on $IMG"
-            failures=$((failures+1))
+      - name: Detect Docker Hub creds presence
+        id: dh
+        shell: bash
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [[ -n "$DH_USER" && -n "$DH_TOKEN" ]]; then
+            echo "has=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has=false" >> "$GITHUB_OUTPUT"
           fi
-        done < images.txt
 
-        echo "failures=$failures" >> "$GITHUB_OUTPUT"
+      - name: (Optional) Docker Hub login (for private images)
+        if: ${{ steps.dh.outputs.has == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    - name: Dump all vuln IDs
-      if: always()
-      run: |
+      - name: Setup Buildx if dockerfiles provided
+        if: ${{ inputs.dockerfiles != '' }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: Reset buildx builder
+        if: ${{ inputs.dockerfiles != '' }}
+        run: |
+          docker buildx rm mybuilder || true
+          docker buildx create --use --name mybuilder
+
+      - name: Build images from dockerfiles (local tags)
+        id: build
+        if: ${{ inputs.dockerfiles != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${{ inputs.dockerfiles }}" | sed 's/^[ \t]*//' > dockerfiles.txt
+          : > built-images.txt
+          i=0
+          while read -r DF; do
+            [[ -z "$DF" ]] && continue
+            ((i=i+1))
+            TAG="local/snyk-${i}:pr"
+            CTX="$(dirname "$DF")"
+            echo "Building $TAG from $DF (context=$CTX)"
+            docker build --progress=plain -t "$TAG" -f "$DF" "$CTX"
+            echo "$TAG" >> built-images.txt
+          done < dockerfiles.txt
+          {
+            echo "images<<EOF"
+            cat built-images.txt
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install Snyk CLI
+        uses: snyk/actions/setup@0.4.0
+
+      - name: Auth Snyk
+        run: snyk auth "${SNYK_TOKEN}"
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      - name: Build .snyk policy from ignore list
+        shell: bash
+        run: |
+          set -euo pipefail
+          touch .snyk
+          if [[ -f "${{ inputs.ignore_list_path }}" ]]; then
+            echo "Applying ignores from ${{ inputs.ignore_list_path }}"
+            grep -v '^\s*#' "${{ inputs.ignore_list_path }}" | sed '/^\s*$/d' | while read -r ID; do
+              echo "Ignoring $ID"
+              snyk ignore --id="$ID" --reason="approved via repo ignore list" --expiry=2099-12-31 --yes --quiet || true
+            done
+          else
+            echo "No ignore list at ${{ inputs.ignore_list_path }}; proceeding without ignores."
+          fi
+          echo "Final .snyk policy:"
+          cat .snyk || true
+
+      - name: Scan images
+        id: scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            [[ -n "${{ inputs.images }}" ]] && echo "${{ inputs.images }}"
+            [[ -n "${{ steps.build.outputs.images }}" ]] && echo "${{ steps.build.outputs.images }}"
+            [[ -n "${{ inputs.repo_app }}" && -n "${{ inputs.image_tag }}" ]] && echo "${{ inputs.repo_app }}:${{ inputs.image_tag }}"
+            [[ -n "${{ inputs.repo_web }}" && -n "${{ inputs.image_tag }}" ]] && echo "${{ inputs.repo_web }}:${{ inputs.image_tag }}"
+          } | sed '/^\s*$/d' > images.txt
+
+          echo "Images to scan:"
+          cat images.txt
+
+          failures=0
+          while read -r IMG; do
+            [[ -z "$IMG" ]] && continue
+            echo "=== Pulling (if remote) and scanning: $IMG"
+            docker pull "$IMG" >/dev/null 2>&1 || echo "(local/private image; pull skipped)"
+
+            SAFE="$(echo "$IMG" | tr '/:@' '___')"
+            OUT="snyk-${SAFE}.json"
+
+            if ! snyk container test "$IMG" \
+                 --severity-threshold="${{ inputs.severity }}" \
+                 --json-file-output="$OUT"; then
+              echo "Snyk failed on $IMG"
+              failures=$((failures+1))
+            fi
+          done < images.txt
+
+          echo "failures=$failures" >> "$GITHUB_OUTPUT"
+
+      - name: Dump all vuln IDs
+        if: always()
+        run: |
           for f in snyk-*.json; do
             if [ -f "$f" ]; then
               echo "--- IDs in $f ---"
@@ -192,16 +188,24 @@ jobs:
             fi
           done
 
-    - name: Upload reports
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: snyk-reports
-        path: snyk-*.json
-        if-no-files-found: warn
+      - name: Ensure dummy report exists
+        if: always()
+        run: |
+          shopt -s nullglob
+          if [ ! -f snyk-*.json ]; then
+            echo '{"note": "no snyk reports generated (build or scan failed)"}' > snyk-dummy.json
+          fi
 
-    - name: Fail if any image failed
-      if: ${{ steps.scan.outputs.failures != '0' }}
-      run: |
-        echo "Snyk found un-ignored vulnerabilities (>= ${{ inputs.severity }})."
-        exit 1
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-reports
+          path: snyk-*.json
+          if-no-files-found: warn
+
+      - name: Fail if any image failed
+        if: ${{ steps.scan.outputs.failures != '0' }}
+        run: |
+          echo "Snyk found un-ignored vulnerabilities (>= ${{ inputs.severity }})."
+          exit 1
