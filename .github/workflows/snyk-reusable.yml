@@ -1,0 +1,116 @@
+name: Reusable - Snyk container scan (with ignore list)
+
+on:
+  workflow_call:
+    inputs:
+      images:
+        description: "Newline-separated list of images to scan (registry URLs or local tags)"
+        required: true
+        type: string
+      ignore_list_path:
+        description: "Path to file with ISSUE_IDs to ignore (in caller repo)"
+        required: false
+        type: string
+        default: security/ignores.txt
+      severity:
+        description: "Fail threshold (low|medium|high|critical). We gate on high by default."
+        required: false
+        type: string
+        default: high
+      upload_artifacts:
+        description: "Upload JSON reports"
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      SNYK_TOKEN:
+        required: true
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+
+jobs:
+  snyk-scan:
+    name: Snyk scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout caller repo (to read ignores file)
+        uses: actions/checkout@v4
+
+      - name: (Optional) Docker Hub login (for private images)
+        if: ${{ secrets.DOCKERHUB_USERNAME && secrets.DOCKERHUB_TOKEN }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Install Snyk CLI
+        uses: snyk/actions/setup@v1
+
+      - name: Auth Snyk
+        run: snyk auth "${SNYK_TOKEN}"
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      - name: Build .snyk policy from ignore list
+        shell: bash
+        run: |
+          set -euo pipefail
+          touch .snyk
+          if [[ -f "${{ inputs.ignore_list_path }}" ]]; then
+            echo "Applying ignores from ${{ inputs.ignore_list_path }}"
+            # read non-empty lines that do not start with '#'
+            grep -v '^\s*#' "${{ inputs.ignore_list_path }}" | sed '/^\s*$/d' | while read -r ID; do
+              echo "Ignoring $ID"
+              # --yes to avoid prompt; --quiet to limit noise; long expiry so it persists
+              snyk ignore --id="$ID" --reason="approved via repo ignore list" --expiry=2099-12-31 --yes --quiet || true
+            done
+          else
+            echo "No ignore list at ${{ inputs.ignore_list_path }}; proceeding without ignores."
+          fi
+          echo "Final .snyk policy:"
+          cat .snyk || true
+
+      - name: Scan images
+        id: scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${{ inputs.images }}" > images.txt
+          failures=0
+
+          while read -r IMG; do
+            [[ -z "$IMG" ]] && continue
+            echo "=== Pulling (if remote) and scanning: $IMG"
+            docker pull "$IMG" >/dev/null 2>&1 || echo "(local or private image, pull skipped)"
+
+            SAFE="$(echo "$IMG" | tr '/:@' '___')"
+            OUT="snyk-${SAFE}.json"
+
+            # Snyk returns non-zero if vulns >= threshold and not ignored
+            if ! snyk container test "$IMG" \
+                --severity-threshold="${{ inputs.severity }}" \
+                --json-file-output="$OUT" ; then
+              echo "Snyk failed on $IMG"
+              failures=$((failures+1))
+            fi
+          done < images.txt
+
+          echo "failures=$failures" >> "$GITHUB_OUTPUT"
+
+      - name: Upload reports
+        if: ${{ inputs.upload_artifacts }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-reports
+          path: snyk-*.json
+          if-no-files-found: ignore
+
+      - name: Fail if any image failed
+        if: ${{ steps.scan.outputs.failures != '0' }}
+        run: |
+          echo "Snyk found un-ignored vulnerabilities (>= ${{ inputs.severity }})."
+          exit 1
