@@ -192,17 +192,24 @@ jobs:
         if: always()
         run: |
           shopt -s nullglob
-          if [ ! -f snyk-*.json ]; then
+          files=(snyk-*.json)
+          if [ ${#files[@]} -eq 0 ]; then
             echo '{"note": "no snyk reports generated (build or scan failed)"}' > snyk-dummy.json
+            ls -l snyk-dummy.json
+          else
+            echo "Reports exist:"
+            ls -l snyk-*.json
           fi
 
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: snyk-reports
-          path: snyk-*.json
-          if-no-files-found: warn
+            name: snyk-reports
+            path: |
+              snyk-*.json
+              snyk-dummy.json
+            if-no-files-found: warn
 
       - name: Fail if any image failed
         if: ${{ steps.scan.outputs.failures != '0' }}
