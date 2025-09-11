@@ -13,7 +13,21 @@ name: Reusable - Snyk container scan (with ignore list)
       dockerfiles:
         description: >
           Newline-separated list of Dockerfile paths to build+scan locally
-          (each built with its directory as context)
+        required: false
+        type: string
+      image_tag:
+        description: >
+          The image tag (e.g. edge, v1.2.3)
+        required: false
+        type: string
+      repo_app:
+        description: >
+          Docker Hub repo for app image (e.g. itaef/devops-app)
+        required: false
+        type: string
+      repo_web:
+        description: >
+          Docker Hub repo for web image (e.g. itaef/devops-web)
         required: false
         type: string
       ignore_list_path:
@@ -114,7 +128,6 @@ jobs:
         touch .snyk
         if [[ -f "${{ inputs.ignore_list_path }}" ]]; then
           echo "Applying ignores from ${{ inputs.ignore_list_path }}"
-          # read non-empty lines that do not start with '#'
           grep -v '^\s*#' "${{ inputs.ignore_list_path }}" | sed '/^\s*$/d' | while read -r ID; do
             echo "Ignoring $ID"
             snyk ignore --id="$ID" --reason="approved via repo ignore list" --expiry=2099-12-31 --yes --quiet || true
@@ -130,10 +143,11 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        # unify explicit images + any locally built images
         {
           [[ -n "${{ inputs.images }}" ]] && echo "${{ inputs.images }}"
           [[ -n "${{ steps.build.outputs.images }}" ]] && echo "${{ steps.build.outputs.images }}"
+          [[ -n "${{ inputs.repo_app }}" && -n "${{ inputs.image_tag }}" ]] && echo "${{ inputs.repo_app }}:${{ inputs.image_tag }}"
+          [[ -n "${{ inputs.repo_web }}" && -n "${{ inputs.image_tag }}" ]] && echo "${{ inputs.repo_web }}:${{ inputs.image_tag }}"
         } | sed '/^\s*$/d' > images.txt
 
         echo "Images to scan:"
@@ -148,7 +162,6 @@ jobs:
           SAFE="$(echo "$IMG" | tr '/:@' '___')"
           OUT="snyk-${SAFE}.json"
 
-          # Snyk returns non-zero if vulns >= threshold and not ignored
           if ! snyk container test "$IMG" \
                --severity-threshold="${{ inputs.severity }}" \
                --json-file-output="$OUT"; then
