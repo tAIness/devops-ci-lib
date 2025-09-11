@@ -123,30 +123,6 @@ jobs:
           echo "EOF"
         } >> "$GITHUB_OUTPUT"
 
-    - name: Build images from dockerfiles (local tags)
-      id: build
-      if: ${{ inputs.dockerfiles != '' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        echo "${{ inputs.dockerfiles }}" > dockerfiles.txt
-        : > built-images.txt
-        i=0
-        while read -r DF; do
-          [[ -z "$DF" ]] && continue
-          ((i=i+1))
-          TAG="local/snyk-${i}:pr"
-          CTX="$(dirname "$DF")"
-          echo "Building $TAG from $DF (context=$CTX)"
-          docker build -t "$TAG" -f "$DF" "$CTX"
-          echo "$TAG" >> built-images.txt
-        done < dockerfiles.txt
-        {
-          echo "images<<EOF"
-          cat built-images.txt
-          echo "EOF"
-        } >> "$GITHUB_OUTPUT"
-
     - name: Install Snyk CLI
       uses: snyk/actions/setup@0.4.0
 
