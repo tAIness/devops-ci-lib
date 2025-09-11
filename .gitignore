@@ -1,2 +1,6 @@
 # OS/editor
 .DS_Store
+
+# IDE settings
+.idea/
+.vscode/
