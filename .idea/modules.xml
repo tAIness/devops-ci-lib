@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<project version="4">
-  <component name="ProjectModuleManager">
-    <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/devops-ci-lib.iml" filepath="$PROJECT_DIR$/.idea/devops-ci-lib.iml" />
-      <module fileurl="file://$USER_HOME$/devops-project1/.idea/supermario.iml" filepath="$USER_HOME$/devops-project1/.idea/supermario.iml" />
-    </modules>
-  </component>
-</project>
