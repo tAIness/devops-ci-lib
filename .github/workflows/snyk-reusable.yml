@@ -144,7 +144,7 @@ jobs:
           echo "Final .snyk policy:"
           cat .snyk || true
 
-      - name: Scan images
+- name: Scan images
         id: scan
         shell: bash
         run: |
@@ -163,17 +163,17 @@ jobs:
           while read -r IMG; do
             [[ -z "$IMG" ]] && continue
             echo "=== Pulling (if remote) and scanning: $IMG"
-            docker pull "$IMG" >/dev/null 2>&1 || echo "(local/private image; pull skipped)"
-
+            docker pull "$IMG" || echo "(local/private image; pull skipped)"
             SAFE="$(echo "$IMG" | tr '/:@' '___')"
             OUT="snyk-${SAFE}.json"
 
-            if ! snyk container test "$IMG" \
-                 --severity-threshold="${{ inputs.severity }}" \
-                 --json-file-output="$OUT"; then
-              echo "Snyk failed on $IMG"
-              failures=$((failures+1))
-            fi
+            echo "--- Running snyk container test on $IMG ---"
+            snyk container test "$IMG" \
+              --severity-threshold="${{ inputs.severity }}" \
+              --json-file-output="$OUT" || failures=$((failures+1))
+
+            echo "--- Contents of $OUT (if exists) ---"
+            test -f "$OUT" && head -n 50 "$OUT" || echo "No $OUT created"
           done < images.txt
 
           echo "failures=$failures" >> "$GITHUB_OUTPUT"
