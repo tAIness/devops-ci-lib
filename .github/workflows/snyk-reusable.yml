@@ -159,25 +159,25 @@ jobs:
             [[ -n "${{ inputs.repo_web }}" && -n "${{ inputs.image_tag }}" ]] && echo "${{ inputs.repo_web }}:${{ inputs.image_tag }}"
           } | sed '/^\s*$/d' > images.txt
 
-          echo "Images to scan:"
-          cat images.txt
-
+          echo "Images to scan:"; cat images.txt
           failures=0
+
           while read -r IMG; do
             [[ -z "$IMG" ]] && continue
             echo "=== Pulling (if remote) and scanning: $IMG"
             docker pull "$IMG" >/dev/null 2>&1 || echo "(local/private image; pull skipped)"
 
-            # Ensure image exists locally before scanning
-            if ! docker image inspect "$IMG" >/dev/null 2>&1; then
-              echo "!! Skipping, image not present locally and pull failed: $IMG"
-              SAFE="$(echo "$IMG" | tr '/:@' '___')"
-              echo "{\"error\":\"image_not_found\",\"image\":\"$IMG\"}" > "snyk-${SAFE}.json"
-              continue
-            fi
-
             SAFE="$(echo "$IMG" | tr '/:@' '___')"
             OUT="snyk-${SAFE}.json"
+
+            # Verify image actually exists locally
+            if ! docker image inspect "$IMG" >/dev/null 2>&1; then
+              echo "!! Image not available locally and pull failed: $IMG"
+              echo "{\"error\":\"image_not_found\",\"image\":\"$IMG\"}" > "$OUT"
+              # count as a failure so you notice it
+              failures=$((failures+1))
+              continue
+            fi
 
             echo "--- Running snyk container test on $IMG ---"
             set +e
@@ -185,7 +185,7 @@ jobs:
               --severity-threshold="${{ inputs.severity }}" \
               --json-file-output="$OUT"
             rc=$?
-            # Fallback: if json-file-output wasn't created, try --json pipe
+            # Fallback: if file wasn't written, try stdout JSON
             if [ ! -s "$OUT" ]; then
               snyk container test "$IMG" \
                 --severity-threshold="${{ inputs.severity }}" \
@@ -193,8 +193,8 @@ jobs:
             fi
             set -e
 
-            echo "--- Head of $OUT (if exists) ---"
-            test -f "$OUT" && head -n 50 "$OUT" || echo "No $OUT created"
+            echo "--- Head of $OUT ---"
+            test -f "$OUT" && head -n 30 "$OUT" || echo "No $OUT created"
 
             if [ $rc -ne 0 ]; then
               echo "Snyk failed on $IMG (rc=$rc)"
