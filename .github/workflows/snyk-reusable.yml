@@ -110,7 +110,8 @@ jobs:
             TAG="local/snyk-${i}:pr"
             CTX="$(dirname "$DF")"
             echo "Building $TAG from $DF (context=$CTX)"
-            docker build --progress=plain -t "$TAG" -f "$DF" "$CTX"
+            # Force-load into local docker daemon so Snyk can inspect
+            docker buildx build --load --progress=plain -t "$TAG" -f "$DF" "$CTX"
             echo "$TAG" >> built-images.txt
           done < dockerfiles.txt
           {
@@ -119,8 +120,20 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: List built images
+        if: ${{ inputs.dockerfiles != '' }}
+        run: |
+          echo "=== docker images (local/snyk-*) ==="
+          docker image ls --format '{{.Repository}}:{{.Tag}} {{.ID}}' | grep '^local/snyk-' || true
+
       - name: Install Snyk CLI
         uses: snyk/actions/setup@0.4.0
+
+      - name: Ensure jq present
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update -y && sudo apt-get install -y jq
+          fi
 
       - name: Show Snyk version
         run: snyk --version
@@ -174,7 +187,6 @@ jobs:
             if ! docker image inspect "$IMG" >/dev/null 2>&1; then
               echo "!! Image not available locally and pull failed: $IMG"
               echo "{\"error\":\"image_not_found\",\"image\":\"$IMG\"}" > "$OUT"
-              # count as a failure so you notice it
               failures=$((failures+1))
               continue
             fi
