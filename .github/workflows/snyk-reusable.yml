@@ -164,7 +164,9 @@ jobs:
         id: scan
         shell: bash
         run: |
-          # Collect failures ourselves; keep pipefail and nounset
+          # Disable GitHub's default -e so this step never aborts early
+          set +e
+          # Keep useful safety flags
           set -u -o pipefail
 
           {
@@ -186,7 +188,7 @@ jobs:
             SAFE="$(echo "$IMG" | tr '/:@' '___')"
             OUT="snyk-${SAFE}.json"
 
-            # Ensure image is present locally
+            # Ensure image exists locally
             if ! docker image inspect "$IMG" >/dev/null 2>&1; then
               echo "!! Image not available locally and pull failed: $IMG"
               echo "{\"error\":\"image_not_found\",\"image\":\"$IMG\"}" > "$OUT"
@@ -195,23 +197,24 @@ jobs:
             fi
 
             echo "--- Running snyk on $IMG ---"
-            # Let Snyk return non-zero (it means 'found issues'); we count it instead of failing the step
-            if ! snyk container test "$IMG" \
-                  --severity-threshold="${{ inputs.severity }}" \
-                  --json-file-output="$OUT"; then
-              echo "Snyk returned non-zero for $IMG (vulns above threshold)"
-              failures=$((failures+1))
-            fi
+            snyk container test "$IMG" \
+              --severity-threshold="${{ inputs.severity }}" \
+              --json-file-output="$OUT"
+            rc=$?
 
-            # If JSON not created, try stdout fallback then still don’t fail the step
+            # Fallback: if JSON wasn’t written, grab stdout JSON
             if [ ! -s "$OUT" ]; then
               snyk container test "$IMG" \
                 --severity-threshold="${{ inputs.severity }}" \
                 --json > "$OUT" 2>/dev/null || echo '{"note":"no json produced"}' > "$OUT"
             fi
 
-            # Helpful debug – never fail the step
-            head -n 30 "$OUT" || true
+            echo "--- Head of $OUT ---" ; head -n 30 "$OUT" || true
+
+            if [ $rc -ne 0 ]; then
+              echo "Snyk returned non-zero for $IMG (likely vulns above threshold)"
+              failures=$((failures+1))
+            fi
           done < images.txt
 
           echo "failures=$failures" >> "$GITHUB_OUTPUT"
@@ -221,6 +224,14 @@ jobs:
         run: |
           echo "Snyk found un-ignored vulnerabilities (>= ${{ inputs.severity }})."
           exit 1
+
+      - name: Trace on error (debug)
+        if: always()
+        shell: bash
+        run: |
+         set -o errtrace
+         trap 'echo "ERR: last=\"$BASH_COMMAND\" status=$?"' ERR
+         true
 
       - name: Dump all vuln IDs
         if: always()
