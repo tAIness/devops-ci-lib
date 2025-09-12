@@ -164,15 +164,18 @@ jobs:
         id: scan
         shell: bash
         run: |
-          set -euo pipefail
+          # Collect failures ourselves; keep pipefail and nounset
+          set -u -o pipefail
+
           {
             [[ -n "${{ inputs.images }}" ]] && echo "${{ inputs.images }}"
             [[ -n "${{ steps.build.outputs.images }}" ]] && echo "${{ steps.build.outputs.images }}"
             [[ -n "${{ inputs.repo_app }}" && -n "${{ inputs.image_tag }}" ]] && echo "${{ inputs.repo_app }}:${{ inputs.image_tag }}"
             [[ -n "${{ inputs.repo_web }}" && -n "${{ inputs.image_tag }}" ]] && echo "${{ inputs.repo_web }}:${{ inputs.image_tag }}"
-          } | sed '/^\s*$/d' > images.txt
+          } | sed '/^[[:space:]]*$/d' > images.txt
 
           echo "Images to scan:"; cat images.txt
+
           failures=0
 
           while read -r IMG; do
@@ -183,7 +186,7 @@ jobs:
             SAFE="$(echo "$IMG" | tr '/:@' '___')"
             OUT="snyk-${SAFE}.json"
 
-            # Verify image actually exists locally
+            # Ensure image is present locally
             if ! docker image inspect "$IMG" >/dev/null 2>&1; then
               echo "!! Image not available locally and pull failed: $IMG"
               echo "{\"error\":\"image_not_found\",\"image\":\"$IMG\"}" > "$OUT"
@@ -191,30 +194,33 @@ jobs:
               continue
             fi
 
-            echo "--- Running snyk container test on $IMG ---"
-            set +e
-            snyk container test "$IMG" \
-              --severity-threshold="${{ inputs.severity }}" \
-              --json-file-output="$OUT"
-            rc=$?
-            # Fallback: if file wasn't written, try stdout JSON
+            echo "--- Running snyk on $IMG ---"
+            # Let Snyk return non-zero (it means 'found issues'); we count it instead of failing the step
+            if ! snyk container test "$IMG" \
+                  --severity-threshold="${{ inputs.severity }}" \
+                  --json-file-output="$OUT"; then
+              echo "Snyk returned non-zero for $IMG (vulns above threshold)"
+              failures=$((failures+1))
+            fi
+
+            # If JSON not created, try stdout fallback then still don’t fail the step
             if [ ! -s "$OUT" ]; then
               snyk container test "$IMG" \
                 --severity-threshold="${{ inputs.severity }}" \
-                --json > "$OUT" 2>/dev/null || true
+                --json > "$OUT" 2>/dev/null || echo '{"note":"no json produced"}' > "$OUT"
             fi
-            set -e
 
-            echo "--- Head of $OUT ---"
-            test -f "$OUT" && head -n 30 "$OUT" || echo "No $OUT created"
-
-            if [ $rc -ne 0 ]; then
-              echo "Snyk failed on $IMG (rc=$rc)"
-              failures=$((failures+1))
-            fi
+            # Helpful debug – never fail the step
+            head -n 30 "$OUT" || true
           done < images.txt
 
           echo "failures=$failures" >> "$GITHUB_OUTPUT"
+
+      - name: Fail if any image failed
+        if: ${{ steps.scan.outputs.failures != '0' }}
+        run: |
+          echo "Snyk found un-ignored vulnerabilities (>= ${{ inputs.severity }})."
+          exit 1
 
       - name: Dump all vuln IDs
         if: always()
