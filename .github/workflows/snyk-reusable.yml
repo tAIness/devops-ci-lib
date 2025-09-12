@@ -122,6 +122,9 @@ jobs:
       - name: Install Snyk CLI
         uses: snyk/actions/setup@0.4.0
 
+      - name: Show Snyk version
+        run: snyk --version
+
       - name: Auth Snyk
         run: snyk auth "${SNYK_TOKEN}"
         env:
@@ -144,7 +147,7 @@ jobs:
           echo "Final .snyk policy:"
           cat .snyk || true
 
-- name: Scan images
+      - name: Scan images
         id: scan
         shell: bash
         run: |
@@ -163,17 +166,40 @@ jobs:
           while read -r IMG; do
             [[ -z "$IMG" ]] && continue
             echo "=== Pulling (if remote) and scanning: $IMG"
-            docker pull "$IMG" || echo "(local/private image; pull skipped)"
+            docker pull "$IMG" >/dev/null 2>&1 || echo "(local/private image; pull skipped)"
+
+            # Ensure image exists locally before scanning
+            if ! docker image inspect "$IMG" >/dev/null 2>&1; then
+              echo "!! Skipping, image not present locally and pull failed: $IMG"
+              SAFE="$(echo "$IMG" | tr '/:@' '___')"
+              echo "{\"error\":\"image_not_found\",\"image\":\"$IMG\"}" > "snyk-${SAFE}.json"
+              continue
+            fi
+
             SAFE="$(echo "$IMG" | tr '/:@' '___')"
             OUT="snyk-${SAFE}.json"
 
             echo "--- Running snyk container test on $IMG ---"
+            set +e
             snyk container test "$IMG" \
               --severity-threshold="${{ inputs.severity }}" \
-              --json-file-output="$OUT" || failures=$((failures+1))
+              --json-file-output="$OUT"
+            rc=$?
+            # Fallback: if json-file-output wasn't created, try --json pipe
+            if [ ! -s "$OUT" ]; then
+              snyk container test "$IMG" \
+                --severity-threshold="${{ inputs.severity }}" \
+                --json > "$OUT" 2>/dev/null || true
+            fi
+            set -e
 
-            echo "--- Contents of $OUT (if exists) ---"
+            echo "--- Head of $OUT (if exists) ---"
             test -f "$OUT" && head -n 50 "$OUT" || echo "No $OUT created"
+
+            if [ $rc -ne 0 ]; then
+              echo "Snyk failed on $IMG (rc=$rc)"
+              failures=$((failures+1))
+            fi
           done < images.txt
 
           echo "failures=$failures" >> "$GITHUB_OUTPUT"
@@ -205,11 +231,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-            name: snyk-reports
-            path: |
-              snyk-*.json
-              snyk-dummy.json
-            if-no-files-found: warn
+          name: snyk-reports
+          path: |
+            snyk-*.json
+            snyk-dummy.json
+          if-no-files-found: warn
 
       - name: Fail if any image failed
         if: ${{ steps.scan.outputs.failures != '0' }}
