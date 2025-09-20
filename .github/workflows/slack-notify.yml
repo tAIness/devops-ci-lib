@@ -1,0 +1,34 @@
+# .github/workflows/slack-notify.yml
+name: Slack notify
+on:
+  workflow_call:
+    inputs:
+      title:     {type: string, required: true}
+      status:    {type: string, required: true}   # success|failure|cancelled|in_progress
+      pages_url: {type: string, default: ""}
+      only_on:   {type: string, default: "always"} # or "failure"
+      message:   {type: string, default: ""}
+      run_url:   {type: string, default: ""}
+    secrets:
+      SLACK_WEBHOOK_URL: { required: true }
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - id: gate
+        run: |
+          echo "skip=$([ '${{ inputs.only_on }}' = failure -a '${{ inputs.status }}' != failure ] && echo true || echo false)" >> $GITHUB_OUTPUT
+      - if: steps.gate.outputs.skip != 'true'
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "*${{ inputs.title }}* — `${{ inputs.status }}`",
+              "attachments": [
+                { "color": "${{ inputs.status == 'failure' && '#E01E5A' || '#2EB67D' }}",
+                  "text": "${{ inputs.message }}\n${{ inputs.pages_url }}\n${{ inputs.run_url }}" }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
